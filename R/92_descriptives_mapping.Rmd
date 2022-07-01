@@ -1,0 +1,510 @@
+---
+title: "Luxembourg Research Evaluation 2022: Knowledge Bases, Research Areas, Topics"
+author: "Daniel S. Hain"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+output:
+  html_document:
+    theme: flatly
+    code_folding: hide
+    df_print: paged
+    toc: false
+    toc_depth: 2
+    toc_float:
+      collapsed: false
+---
+
+```{=html}
+<style type="text/css">
+.main-container {
+  max-width: 1200px;
+  margin-left: auto;
+  margin-right: auto;
+}
+</style>
+```
+
+```{r setup, include=FALSE}
+### Generic preamble
+rm(list=ls())
+Sys.setenv(LANG = "en")
+options(scipen = 5)
+set.seed(1337)
+
+### Load packages  
+# general
+library(tidyverse)
+library(magrittr)
+
+# Kiblio & NW
+library(bibliometrix)
+library(tidygraph)
+library(ggraph)
+
+# NLP
+library(tidytext)
+
+# Dataviz
+library(plotly)
+
+# Knit
+library(knitr) # For display of the markdown
+library(kableExtra) # For table styling
+
+# own functions
+source("../functions/functions_basic.R")
+source("../functions/functions_summary.R")
+source("../functions/00_parameters.R")
+
+# Knitr options
+knitr::opts_chunk$set(echo = FALSE, 
+                      warning = FALSE, 
+                      message = FALSE)
+```
+
+
+```{r, include=FALSE}
+var_prefix <- 'ai_position'
+var_suffix <- '2022'
+```
+
+
+# Introduction: `r var_prefix` Department `r var_suffix`
+
+Here are preliminary results of the bibliometric mapping of the 2022 Luxembourg research evaluation. Its purpose is:
+
+* To map the broader research community and distinct research field the department contributes to.
+* Identify core knowledge bases, research areaS, TRENDS AND TOPICS.
+* Highlight the positioning of the department within this dynamics.
+
+The method for the research-field-mapping can be reiviewed here:
+
+[Rakas, M., & Hain, D. S. (2019). The state of innovation system research: What happens beneath the surface?. Research Policy, 48(9), 103787.](https://doi.org/10.1016/j.respol.2019.04.011)
+
+
+<!-- ####################################################################################### -->
+<!-- ####################################################################################### -->
+<!-- ############################# NEXT PART ############################################### -->
+<!-- ####################################################################################### -->
+<!-- ####################################################################################### -->
+
+```{r, include=FALSE}
+# Load data
+M <- readRDS(paste0('../../temp/M_', str_to_lower(var_prefix), '_', str_to_lower(var_suffix), '.rds')) %>% as_tibble() %>% 
+  distinct(UT, .keep_all = TRUE) %>% 
+  filter(PY >= PY_min, PY <= PY_max)
+```
+
+# Topic modelling
+
+```{r, include=FALSE}
+text_tidy <- readRDS(paste0('../../temp/text_tidy_', str_to_lower(var_prefix), '_', str_to_lower(var_suffix), '.rds'))
+text_lda <- readRDS(paste0('../../temp/text_LDA_', str_to_lower(var_prefix), '_', str_to_lower(var_suffix), '.rds')) 
+
+text_lda_beta <- text_lda %>% tidy(matrix = "beta") 
+text_lda_gamma <- text_lda %>% tidy(matrix = "gamma")
+```
+
+```{r, include=FALSE}
+com_names_top <- tibble( 
+  com = 1:(text_lda_gamma %>% pull(topic) %>% n_distinct()),
+  type = 'TP',
+  col = com %>% gg_color_select(pal = pal_tp),
+  com_name = 
+    # # 1st alternative: Number them 1-n
+    paste(type, 1:(text_lda_gamma %>% pull(topic) %>% n_distinct()))
+  # # 2nd alternative: Load from csv
+  # read_csv('../../data/community_labeling') %>% filter(type = 'topic', institute = var_prefix, department = var_suffix) %>% arrange(com) %>% pull(label)
+  # 3rd alternative: declare here
+    #c('1 TIS & Markets', '2 ? ... ',)
+  )
+```
+
+```{r, include=FALSE}
+text_lda_beta %<>%  left_join(com_names_top %>% select(com, com_name, col), by = c('topic' = 'com'))
+text_lda_gamma %<>% left_join(com_names_top %>% select(com, com_name, col), by = c('topic' = 'com'))
+```
+
+
+
+## Topics by topwords
+```{r, fig.width=17.5, fig.height=17.5} 
+text_lda_beta %>%
+  group_by(com_name) %>%
+  slice_max(beta, n = 10) %>%
+  ungroup() %>%
+  mutate(term = reorder_within(term, beta, com_name)) %>%
+  ggplot(aes(term, beta, fill = factor(com_name))) +
+  geom_col(show.legend = FALSE) +
+  facet_wrap(~ com_name, scales = "free", ncol = 3) +
+  coord_flip() +
+  scale_x_reordered() +
+  labs(x = "Intra-topic distribution of word",
+       y = "Words in topic") + 
+  scale_fill_manual(name = "Legend", values = com_names_top %>% pull(col)) 
+
+#plot_ly <- plot %>% plotly::ggplotly()
+#htmlwidgets::saveWidget(plotly::as_widget(plot_ly), '../output\vis_plotly_topic_terms.html', selfcontained = TRUE)
+```
+
+
+## Topics over time
+
+```{r, fig.width = 15, fig.height=7.5}
+text_lda_gamma %>%
+  rename(weight = gamma) %>%
+  left_join(M %>% select(XX, PY), by = c('document' = 'XX')) %>%
+  mutate(PY = as.numeric(PY)) %>%
+  group_by(PY, com_name) %>% summarise(weight = sum(weight)) %>% ungroup() %>%
+  group_by(PY) %>% mutate(weight_PY = sum(weight)) %>% ungroup() %>%
+  mutate(weight_rel = weight / weight_PY) %>%
+  select(PY, com_name, weight, weight_rel) %>%
+  filter(PY >= PY_min & PY <= PY_max) %>%
+  arrange(PY, com_name) %>%
+  plot_summary_timeline(y1 = weight, y2 = weight_rel, t = PY, t_min = PY_min, t_max = PY_max, by = com_name,  label = TRUE, pal = pal_tp, 
+                        y1_text = "Topic popularity annualy", y2_text = "Share of topic annually") +
+  plot_annotation(title = paste('Topic Modelling:', var_prefix, 'Dept.', var_suffix, sep = ' '),
+                  subtitle = paste('Timeframe:', PY_min, '-', PY_max , sep = ' '),
+                  caption = 'Absolute topic appearance (left), Relative topic appearance (right)')
+```
+
+
+<!-- ####################################################################################### -->
+<!-- ####################################################################################### -->
+<!-- ############################# NEXT PART ############################################### -->
+<!-- ####################################################################################### -->
+<!-- ####################################################################################### -->
+
+```{r, include=FALSE}
+rm(text_tidy, text_lda)
+```
+
+
+# Knowledge Bases: Co-Citation network analysis {.tabset}
+
+```{r, include=FALSE}
+C_nw <- readRDS(paste0('../../temp/C_nw_', str_to_lower(var_prefix), '_', str_to_lower(var_suffix), '.rds'))
+```
+
+```{r, include=FALSE}
+com_names_cit <- tibble( 
+  com = 1:(C_nw %>% pull(com) %>% n_distinct()),
+  type = 'KB',
+  col = com %>% gg_color_select(pal = pal_kb),
+  com_name = 
+    # # 1st alternative: Number them 1-n
+    paste(type, 1:(C_nw %>% pull(com) %>% n_distinct()))
+    # # 2nd alternative: Load from csv
+  # read_csv('../../data/community_labeling') %>% filter(type = 'knowledge_base', institute = var_prefix, department = var_suffix) %>% arrange(com) %>% pull(label)
+  # 3rd alternative: declare here
+    #c('1 TIS & Markets', '2 ? ... ',)
+  )
+```
+
+```{r, include=FALSE}
+C_nw %<>% left_join(com_names_cit %>% select(com, com_name, col), by = "com")
+```
+
+
+**Note:** This analysis refers the co-citation analysis, where the cited references and not the original publications are the unit of analysis. See tab `Technical description`for additional explanations
+
+## Knowledge Bases summary
+
+### Main Indicators
+In order to partition networks into components or clusters, we deploy a **community detection** technique based on the **Lovain Algorithm** (Blondel et al., 2008). The Lovain Algorithm is a heuristic method that attempts to optimize the modularity of communities within a network by maximizing within- and minimizing between-community connectivity. We identify the following communities = knowledge bases.
+
+```{r}
+C_nw %>%
+  group_by(com_name) %>%
+  summarise(n = n(), density_int = ((sum(dgr_int) / (n() * (n() - 1))) * 100) %>% round(3)) %>%
+  relocate(com_name, everything())
+```
+
+```{r}
+kb_sum <-C_nw %>% group_by(com) %>% 
+  select(com, name, dgr_int, dgr) %>%
+  arrange(com, desc(dgr_int)) %>%
+  mutate(name = name %>% str_trunc(150)) %>%
+  slice_max(order_by = dgr_int, n = 10, with_ties = FALSE) %>% 
+  kable() 
+
+for(i in 1:nrow(com_names_cit)){
+  kb_sum <- kb_sum %>%
+    pack_rows(paste0('Knowledge Base ', i, ': ', com_names_cit[i, 'com_name']), (i*10-9),  (i*10), label_row_css = "background-color: #666; color: #fff;") 
+  }
+
+kb_sum %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"), font_size = 10)
+```
+
+### Development of Knowledge Bases
+
+```{r, include=FALSE}
+el_2m <- readRDS(paste0('../../temp/el_2m_', str_to_lower(var_prefix), '_', str_to_lower(var_suffix), '.rds')) %>%
+  drop_na()
+```
+
+
+```{r, include=FALSE}
+cit_com_year <- el_2m %>%
+  count(com_cit, PY, name = 'TC') %>%
+  group_by(PY) %>%
+  mutate(TC_rel = TC / sum(TC)) %>%
+  ungroup() %>%
+  arrange(PY, com_cit) %>%
+  left_join(com_names_cit , by = c('com_cit' = 'com')) %>% 
+  complete(com_name, PY, fill = list(TC = 0, TC_rel = 0))
+
+```
+
+```{r, fig.width = 15, fig.height=7.5}
+cit_com_year %>%
+  plot_summary_timeline(y1 = TC, y2 = TC_rel, t = PY, t_min = PY_min, t_max = PY_max, by = com_name, pal = pal_kb, label = TRUE,
+                        y1_text = "Number citations recieved annually",  y2_text = "Share of citations recieved annually") +
+  plot_annotation(title = paste('Knowledge Bses:', var_prefix, 'Dept.', var_suffix, sep = ' '),
+                  subtitle = paste('Timeframe:', PY_min, '-', PY_max , sep = ' '),
+                  caption = 'Absolute knowledge base appearance (left), Relative knowledge base appearance (right)')
+```
+
+## Technical description
+In a co-cittion network, the strength of the relationship between a reference pair $m$ and $n$ ($s_{m,n}^{coc}$) is expressed by the number of publications $C$ which are jointly citing reference $m$ and $n$. 
+
+$$s_{m,n}^{coc} = \sum_i c_{i,m} c_{i,n}$$
+
+The intuition here is that references which are frequently cited together are likely to share commonalities in theory, topic, methodology, or context. It can be interpreted as a measure of similarity as evaluated by other researchers that decide to jointly cite both references. Because the publication process is time-consuming, co-citation is a backward-looking measure, which is appropriate to map the relationship between core literature of a field.
+
+
+<!-- ####################################################################################### -->
+<!-- ####################################################################################### -->
+<!-- ############################# NEXT PART ############################################### -->
+<!-- ####################################################################################### -->
+<!-- ####################################################################################### -->
+
+# Research Areas: Bibliographic coupling analysis {.tabset}
+
+## Research Areas main summary
+
+This is arguably the more interesting part. Here, we identify the literature's current knowledge frontier by carrying out a bibliographic coupling analysis of the publications in our corpus. This measure  uses bibliographical information of  publications to establish a similarity relationship between them. Again, method details to be found in the tab `Technical description`. As you will see, we identify the main research area, but also a set of adjacent research areas with some theoretical/methodological/application overlap.
+
+```{r, include=FALSE}
+M_bib <- readRDS(paste0('../../temp/M_bib_', str_to_lower(var_prefix), '_', str_to_lower(var_suffix), '.rds')) %>% as_tibble()
+```
+
+```{r, include=FALSE}
+com_names_bib <- tibble( 
+  com = 1:(M_bib %>% pull(com) %>% n_distinct()),
+  type = 'RA',
+  col = com %>% gg_color_select(pal = pal_ra),
+  com_name = 
+    # # 1st alternative: Number them 1-n
+    paste(type, 1:(M_bib %>% pull(com) %>% n_distinct()))
+    # # 2nd alternative: Load from csv
+  # read_csv('../../data/community_labeling') %>% filter(type = 'research_area', institute = var_prefix, department = var_suffix) %>% arrange(com) %>% pull(label)
+  # 3rd alternative: declare here
+    #c('1 TIS & Markets', '2 ? ... ',)
+  )
+```
+
+```{r, include=FALSE}
+M_bib %<>% left_join(com_names_bib %>% select(com, com_name, col), by = "com")
+```
+
+### Main Characteristics
+
+To identify communities in the field's knowledge frontier (labeled **research areas**) we again use the **Lovain Algorithm** (Blondel et al., 2008). We identify the following communities = research areas.
+
+```{r, include=FALSE}
+com_summary_bib <- M_bib %>%
+  drop_na(com) %>%
+  group_by(com, com_name) %>%
+  summarise(n = n(), density_int = ((sum(dgr_int) / (n() * (n() - 1))) * 100) %>% round(3)) %>%
+  select(com, com_name, everything())
+```
+
+```{r}
+com_summary_bib
+```
+
+
+### Categorization
+
+I up to now gain only provide the 10 most central articles, which can be used to classify them
+
+```{r}
+ra_sum <- M_bib %>% group_by(com_name) %>% 
+  left_join(M %>% select(XX, AU, PY, TI, TC), by = 'XX') %>%
+  mutate(dgr_select = (dgr_int / max(dgr_int) * (TC / max(TC))) ) %>%
+  slice_max(order_by = dgr_select, n = 10, with_ties = FALSE) %>% 
+  mutate(TC_year = TC / (2021 + 1 - PY),
+         AU = AU %>% str_trunc(25),
+         TI = TI %>% str_trunc(125)) %>%
+  select(com_name, AU, PY, TI, dgr_int, TC, TC_year) %>%
+  kable()
+
+
+for(i in 1:nrow(com_names_bib)){
+  ra_sum  %<>%
+    pack_rows(paste0('Research Area ', i, ': ', com_names_bib[i, 'com_name']), (i*10-9),  (i*10), label_row_css = "background-color: #666; color: #fff;") 
+  }
+
+ra_sum %>% kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"), font_size = 10)
+```
+
+### Development
+
+```{r, fig.width = 15, fig.height=7.5}
+M_bib %>%
+  left_join(M %>% select(XX, PY), by = 'XX') %>%
+  mutate(PY = PY %>% as.numeric()) %>%
+  group_by(com_name, PY) %>% summarise(n = n()) %>% ungroup() %>%
+  group_by(PY) %>% mutate(n_PY = sum(n)) %>% ungroup() %>%
+  mutate(n_rel = n / n_PY) %>%
+  select(com_name, PY, n, n_rel) %>%
+  arrange(com_name, PY) %>% 
+  complete(com_name, PY, fill = list(n = 0, n_rel = 0)) %>%
+  plot_summary_timeline(y1 = n, y2 = n_rel, t = PY, t_min = PY_min, t_max = PY_max, by = com_name, label = TRUE, pal = pal_ra,
+                        y1_text = "Number publications annually", y2_text = "Share of publications annually") +
+  plot_annotation(title = paste('Research Areas:', var_prefix, 'Dept.', var_suffix, sep = ' '),
+                  subtitle = paste('Timeframe:', PY_min, '-', PY_max , sep = ' '),
+                  caption = 'Absolute research area appearance (left), Relative research area appearance (right)')
+```
+
+### Connectivity between the research areas
+
+```{r, include=FALSE}
+g_agg <- readRDS(paste0('../../temp/g_bib_agg_', str_to_lower(var_prefix), '_', str_to_lower(var_suffix), '.rds')) %N>%
+  arrange(com) # %>%
+#   mutate(name = names_ra %>% pull(com_ra_name),
+#          color = cols_ra)
+```
+
+```{r, fig.height= 7.5, fig.width=7.5}
+g_agg %E>% 
+  filter(weight > 0 & from != to) %>%
+  filter(weight >= quantile(weight, 0.25) )  %N>%
+  mutate(com = com %>% factor()) %>%
+  ggraph(layout = "circle") + 
+  geom_edge_fan(strenght = 0.075, aes(width = weight), alpha = 0.2)  + 
+  geom_node_point(aes(size = N, color = com))  + 
+  geom_node_text(aes(label = com), repel = TRUE) +
+  theme_graph(base_family = "Arial") +
+  scale_color_brewer(palette = pal_ra) +
+  labs(title = paste('Research Area Connectivity:', var_prefix, 'Dept.', var_suffix, sep = ' '),
+                  subtitle = paste('Timeframe:', PY_min, '-', PY_max , sep = ' '),
+                  caption = 'Nodes = Identified Research Areas; Edges: Bibliographic coupling strenght (JAccard weighted)')
+```
+
+### Knowledge Bases, Research Areas & Topics
+
+```{r, include=FALSE}
+# Nodes
+nl_3m <- com_names_bib %>%
+  bind_rows(com_names_cit) %>%
+  bind_rows(com_names_top) %>%
+  rename(name = com_name,
+         com_nr = com) %>%
+  relocate(name)
+
+# Edges
+el_2m_kb <- el_2m %>%
+  select(-from, -to) %>%
+  inner_join(com_names_cit %>% select(com, com_name), by = c('com_cit' = 'com')) %>%
+  inner_join(com_names_bib %>% select(com, com_name, col), by = c('com_bib' = 'com')) %>%
+  mutate(weight = 1) %>%
+  rename(from = com_name.x,
+         to = com_name.y) %>% # generic
+  select(from, to, weight, col) %>% 
+  drop_na() %>% 
+  count(from, to, col, wt = weight, name = 'weight') %>%
+  filter(percent_rank(weight) >= 0.25) %>%
+  weight_jaccard(i = from, j = to, w = weight) %>% 
+  select(-weight)
+
+el_2m_topic <- text_lda_gamma %>% select(-topic, -col) %>%
+  left_join(M_bib %>% select(XX, com) %>% drop_na(com), by = c('document' = 'XX')) %>%
+  inner_join(com_names_bib %>% select(com, com_name, col), by = c('com' = 'com')) %>%
+  rename(from = com_name.y,
+         to = com_name.x,
+         weight = gamma) %>% # generic
+  select(from, to, weight, col) %>% 
+  drop_na() %>% 
+  count(from, to, col, wt = weight, name = 'weight') %>%
+  filter(percent_rank(weight) >= 0.25) %>%
+  weight_jaccard(i = from, j = to, w = weight) %>% select(-weight)
+
+# graph
+g_3m <- el_2m_kb %>% 
+  bind_rows(el_2m_topic) %>%
+  as_tbl_graph(directed = TRUE) %N>%
+  left_join(nl_3m, by = 'name') %>%
+  mutate(
+    level = case_when(
+      type == "KB" ~ 1,
+      type == "RA" ~ 2,
+      type == "TP" ~ 3),
+    coord_y = 0.1,
+    coord_x = 0.001 + 1/(max(level)-1) * (level-1)
+    )  %N>%
+  filter(!node_is_isolated(), !is.na(level))
+```
+
+```{r, include=FALSE}
+## Build sankey plot
+fig <- plot_ly(type = "sankey", 
+               orientation = "h",
+               arrangement = "snap",
+  node = list(
+    label = g_3m %N>% as_tibble() %>% pull(name),
+    x = g_3m %N>% as_tibble() %>% pull(coord_x),
+    y = g_3m %N>% as_tibble() %>% pull(coord_y),
+    color = g_3m %N>% as_tibble() %>% pull(col), 
+    pad = 4
+  ), 
+  link = list(
+    source = (g_3m %E>% as_tibble() %>% pull(from)) -1,
+    target = (g_3m %E>% as_tibble() %>% pull(to)) -1,
+    value =  g_3m %E>% as_tibble() %>% pull(weight_jac),
+    color = g_3m %E>% as_tibble() %>% pull(col) %>% col2rgb() %>% as.matrix() %>% t() %>% as_tibble() %>% 
+      mutate(col_rgb = paste0('rgba(', red, ',' , green, ',', blue, ',0.75)')) %>%  pull(col_rgb)
+    )
+) %>% 
+  layout(title = paste('Knowledge Bases, Research Areas & Topics:', var_prefix, 'Dept.', var_suffix, sep = ' '),
+         margin = list(l = 50, r = 50, b = 100, t = 100, pad = 2)) 
+```
+
+```{r, fig.height= 10, fig.width=12.5}
+fig
+```
+
+
+
+
+## Technical description
+In a bibliographic coupling network, the **coupling-strength** between publications is determined by the number of commonly cited references they share, assuming a common pool of references to indicate similarity in context, methods, or theory. Formally, the strength of the relationship between a publication pair $i$ and $j$ ($s_{i,j}^{bib}$) is expressed by the number of commonly cited references. 
+
+$$s_{i,j}^{bib} = \sum_m c_{i,m} c_{j,m}$$
+
+Since our corpus contains publications which differ strongly in terms of the number of cited references, we normalize the coupling strength by the Jaccard similarity coefficient. Here, we weight the intercept of two publications' bibliography (shared refeences) by their union (number of all references cited by either $i$ or $j$). It is bounded between zero and one, where one indicates the two publications to have an identical bibliography, and zero that they do not share any cited reference. Thereby, we prevent publications from having high coupling strength due to a large bibliography (e.g., literature surveys).
+
+$$S_{i,j}^{jac-bib} =\frac{C(i \cap j)}{C(i \cup j)} = \frac{s_{i,j}^{bib}}{c_i + c_j - s_{i,j}^{bib}}$$
+
+More recent articles have a higher pool of possible references to co-cite to, hence they are more likely to be coupled. Consequently, bibliographic coupling represents a forward looking measure, and the method of choice to identify the current knowledge frontier at the point of analysis.
+
+<!-- ####################################################################################### -->
+<!-- ####################################################################################### -->
+<!-- ############################# NEXT PART ############################################### -->
+<!-- ####################################################################################### -->
+<!-- ####################################################################################### -->
+
+
+# Endnotes
+
+All results are preliminary so far...
+
+```{r}
+# After knitted do this
+#file.rename(from = "92_descriptives_mapping.nb.html", to = paste0('../output/field_mapping/field_mapping_', str_to_lower(var_prefix), '_', str_to_lower(var_suffix), '.html'))
+```
+
+
+
+
